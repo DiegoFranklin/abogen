@@ -21,6 +21,7 @@ import wave
 from typing import Any
 
 import httpx
+import numpy as np
 
 from abogen.domain.enums import Language
 from abogen.tts_plugin.errors import EngineError, NetworkError
@@ -64,11 +65,38 @@ def engine_language(lang: Language) -> str:
     return result
 
 
-def _wav_duration_seconds(data: bytes) -> float:
-    with wave.open(io.BytesIO(data), "rb") as wav_file:
+def _pcm_float32_and_duration(wav_bytes: bytes) -> tuple[bytes, float]:
+    """Decode a WAV file into raw float32 PCM bytes + duration.
+
+    abogen/tts_plugin/utils.py's Pipeline.__call__ does
+    `np.frombuffer(result.data, dtype=np.float32)` directly on
+    SynthesizedAudio.data -- despite the AudioFormat declaring "audio/wav",
+    the host actually expects headerless float32 PCM, not a real WAV file.
+    kokoro/supertonic's engines happen to satisfy this by writing WAV as
+    32-bit float samples (sf.write defaults to float for a float32 ndarray),
+    so their 44-byte header (a multiple of 4) just becomes ~11 inaudible
+    garbage samples prepended -- never raises, nobody noticed. chatterbox-gpu
+    writes 16-bit PCM instead (torchaudio's wav default for a float tensor),
+    whose header+body size isn't reliably a multiple of 4, which throws
+    "buffer size must be a multiple of element size" instead of silently
+    corrupting a few samples. Parse properly instead of relying on either
+    coincidence.
+    """
+    with wave.open(io.BytesIO(wav_bytes), "rb") as wav_file:
         frames = wav_file.getnframes()
         rate = wav_file.getframerate()
-    return frames / rate if rate else 0.0
+        sample_width = wav_file.getsampwidth()
+        raw_frames = wav_file.readframes(frames)
+
+    if sample_width == 2:
+        samples = np.frombuffer(raw_frames, dtype=np.int16).astype(np.float32) / 32768.0
+    elif sample_width == 4:
+        samples = np.frombuffer(raw_frames, dtype=np.float32)
+    else:
+        raise EngineError(f"unexpected WAV sample width from chatterbox-gpu: {sample_width} bytes")
+
+    duration_seconds = frames / rate if rate else 0.0
+    return samples.tobytes(), duration_seconds
 
 
 class ChatterboxRemoteSession:
@@ -119,11 +147,11 @@ class ChatterboxRemoteSession:
             raise EngineError(f"gpu-broker job failed: {data.get('error')}")
 
         result = data["result"]
-        audio_bytes = base64.b64decode(result["audio_base64"])
-        duration_seconds = _wav_duration_seconds(audio_bytes)
+        wav_bytes = base64.b64decode(result["audio_base64"])
+        pcm_float32, duration_seconds = _pcm_float32_and_duration(wav_bytes)
 
         return SynthesizedAudio(
-            data=audio_bytes,
+            data=pcm_float32,
             format=AudioFormat(mime="audio/wav", extension="wav"),
             duration=Duration(seconds=duration_seconds),
         )
