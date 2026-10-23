@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Mapping, Optional, Tuple
 
-from abogen.tts_plugin.utils import get_voices
+from abogen.tts_plugin.utils import get_voices, is_plugin_registered
 
 
 def infer_provider_from_spec(value: Any, fallback: str = "kokoro") -> str:
@@ -126,4 +126,6 @@ def resolve_voice_target(
     inferred = infer_provider_from_spec(spec, fallback=fallback_provider)
     if inferred == "supertonic":
         return "supertonic", supertonic_voice_from_spec(spec, job_voice), None, None
+    if inferred and inferred != "kokoro" and is_plugin_registered(inferred):
+        return inferred, spec, None, None
     return "kokoro", spec, None, None
