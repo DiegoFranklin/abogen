@@ -119,6 +119,9 @@ def resolve_voice_target(
             steps = int(entry.get("total_steps") or job_supertonic_total_steps or 5)
             speed = float(entry.get("speed") or job_speed or 1.0)
             return "supertonic", supertonic_voice_from_spec(voice, job_voice), speed, steps
+        if provider != "kokoro" and is_plugin_registered(provider):
+            voice = str(entry.get("voice") or job_voice or "").strip()
+            return provider, voice or spec, None, None
         formula = formula_from_kokoro_entry(entry)
         return "kokoro", formula or spec, None, None
 

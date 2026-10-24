@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Mapping, Optional, Set, Tuple
 
-from abogen.tts_plugin.utils import get_voices, get_default_voice
+from abogen.tts_plugin.utils import get_voices, get_default_voice, is_plugin_registered
 from abogen.voice_formulas import extract_voice_ids, pairs_to_formula
 from abogen.voice_cache import ensure_voice_assets
 
@@ -333,7 +333,7 @@ def resolve_voice_choice(
         # - SuperTonic profiles represent a discrete voice id + settings.
         #   In that case, we return a speaker reference so downstream can
         #   resolve provider per-speaker and allow mixed-provider casting.
-        if provider == "supertonic":
+        if provider == "supertonic" or (provider and provider != "kokoro" and is_plugin_registered(provider)):
             resolved_voice = f"speaker:{profile_name}"
             selected_profile = profile_name
             profile_language = (entry or {}).get("language")

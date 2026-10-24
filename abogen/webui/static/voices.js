@@ -33,6 +33,7 @@ const setupVoiceMixer = () => {
   const supertonicSpeedInput = app.querySelector('[data-role="supertonic-speed"]');
   const supertonicStepsLabel = app.querySelector('[data-role="supertonic-steps-display"]');
   const supertonicSpeedLabel = app.querySelector('[data-role="supertonic-speed-display"]');
+  const chatterboxPanelEl = app.querySelector('[data-role="chatterbox_remote-panel"]');
   const speedInput = document.getElementById("preview-speed");
   const importInput = document.getElementById("voice-import-input");
   const headerActions = document.querySelector(".voice-mixer__header-actions");
@@ -148,9 +149,11 @@ const setupVoiceMixer = () => {
     return total;
   };
 
+  const KNOWN_PROVIDERS = ["kokoro", "supertonic", "chatterbox_remote"];
+
   const normalizeProvider = (value) => {
     const candidate = String(value || "").trim().toLowerCase();
-    return candidate === "supertonic" ? "supertonic" : "kokoro";
+    return KNOWN_PROVIDERS.includes(candidate) ? candidate : "kokoro";
   };
 
   const getProviderCatalog = () => {
@@ -158,6 +161,7 @@ const setupVoiceMixer = () => {
       return [
         { id: "kokoro", label: "Kokoro" },
         { id: "supertonic", label: "Supertonic" },
+        { id: "chatterbox_remote", label: "Chatterbox (PT-BR, GPU remota)" },
       ];
     }
     return Array.from(providerSelect.options || []).map((option) => ({
@@ -170,6 +174,9 @@ const setupVoiceMixer = () => {
     const provider = normalizeProvider(providerId);
     if (provider === "supertonic") {
       return "Voice selection + quality/speed per speaker.";
+    }
+    if (provider === "chatterbox_remote") {
+      return "Fixed PT-BR voice, generated on a separate GPU on demand.";
     }
     return "Voice mixing supported via the Kokoro mixer.";
   };
@@ -268,23 +275,28 @@ const setupVoiceMixer = () => {
   const applyProviderToUI = () => {
     const provider = normalizeProvider(state.draft.provider);
     const isSupertonic = provider === "supertonic";
+    const isChatterbox = provider === "chatterbox_remote";
+    const isKokoro = provider === "kokoro";
     if (providerSelect) {
       providerSelect.value = provider;
     }
     if (languageField) {
-      languageField.hidden = isSupertonic;
+      languageField.hidden = !isKokoro;
     }
     if (kokoroMixerEl) {
-      kokoroMixerEl.hidden = isSupertonic;
+      kokoroMixerEl.hidden = !isKokoro;
     }
     if (supertonicPanelEl) {
       supertonicPanelEl.hidden = !isSupertonic;
     }
+    if (chatterboxPanelEl) {
+      chatterboxPanelEl.hidden = !isChatterbox;
+    }
     if (mixTotalEl) {
-      mixTotalEl.hidden = isSupertonic;
+      mixTotalEl.hidden = !isKokoro;
     }
     if (previewBtn) {
-      previewBtn.dataset.label = isSupertonic ? "Preview speaker" : (previewBtn.dataset.label || "Preview speaker");
+      previewBtn.dataset.label = !isKokoro ? "Preview speaker" : (previewBtn.dataset.label || "Preview speaker");
     }
 
     // Keep preview speed aligned with the Supertonic speaker speed.
@@ -299,8 +311,8 @@ const setupVoiceMixer = () => {
 
   const updateMixSummary = () => {
     const provider = normalizeProvider(state.draft.provider);
-    const isSupertonic = provider === "supertonic";
-    if (mixTotalEl && !isSupertonic) {
+    const isKokoro = provider === "kokoro";
+    if (mixTotalEl && isKokoro) {
       mixTotalEl.textContent = `Total weight: ${formatWeight(mixTotal())}`;
     }
     if (profileSummaryEl) {
@@ -309,8 +321,10 @@ const setupVoiceMixer = () => {
         profileSummaryEl.textContent = "Select or create a speaker to begin.";
       } else {
         const profileLabel = state.draft.name ? `Editing: ${state.draft.name}` : "Unsaved speaker";
-        if (isSupertonic) {
+        if (provider === "supertonic") {
           profileSummaryEl.textContent = `${profileLabel} · Supertonic`;
+        } else if (provider === "chatterbox_remote") {
+          profileSummaryEl.textContent = `${profileLabel} · Chatterbox`;
         } else {
           profileSummaryEl.textContent = `${profileLabel} · ${voiceCount} voice${voiceCount === 1 ? "" : "s"}`;
         }
@@ -796,13 +810,14 @@ const setupVoiceMixer = () => {
       setStatus("Give your profile a name first.", "warning");
       return;
     }
+    const savedProvider = normalizeProvider(state.draft.provider);
     const payload = {
       name,
       originalName: state.originalName,
-      provider: normalizeProvider(state.draft.provider),
-      language: normalizeProvider(state.draft.provider) === "kokoro" ? (languageSelect ? languageSelect.value : "a") : "a",
-      voices: normalizeProvider(state.draft.provider) === "kokoro" ? buildProfilePayload() : [],
-      voice: state.draft.supertonic?.voice,
+      provider: savedProvider,
+      language: savedProvider === "kokoro" ? (languageSelect ? languageSelect.value : "a") : "a",
+      voices: savedProvider === "kokoro" ? buildProfilePayload() : [],
+      voice: savedProvider === "chatterbox_remote" ? "chatterbox_ptbr_george" : state.draft.supertonic?.voice,
       total_steps: state.draft.supertonic?.total_steps,
       speed: state.draft.supertonic?.speed,
     };
@@ -913,7 +928,7 @@ const setupVoiceMixer = () => {
       provider,
       language: languageSelect ? languageSelect.value : "a",
       voices: provider === "kokoro" ? buildProfilePayload() : [],
-      voice: state.draft.supertonic?.voice,
+      voice: provider === "chatterbox_remote" ? "chatterbox_ptbr_george" : state.draft.supertonic?.voice,
       total_steps: state.draft.supertonic?.total_steps,
       text: previewTextEl ? previewTextEl.value : "",
       speed: speedInput ? parseFloat(speedInput.value || "1") : 1,
@@ -925,6 +940,8 @@ const setupVoiceMixer = () => {
         setStatus("Enable at least one voice to preview.", "warning");
         return;
       }
+    } else if (provider === "chatterbox_remote") {
+      payload.tts_provider = "chatterbox_remote";
     } else {
       if (!payload.voice) {
         setStatus("Select a Supertonic voice to preview.", "warning");
@@ -1004,8 +1021,8 @@ const setupVoiceMixer = () => {
   if (providerSelect) {
     providerSelect.addEventListener("change", () => {
       state.draft.provider = normalizeProvider(providerSelect.value);
-      // When switching to Supertonic, clear Kokoro mix.
-      if (state.draft.provider === "supertonic") {
+      // When switching away from Kokoro, clear the Kokoro mix.
+      if (state.draft.provider !== "kokoro") {
         state.draft.voices = new Map();
       }
       applyDraftToControls();

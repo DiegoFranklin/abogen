@@ -90,6 +90,13 @@ def api_save_voice_profile() -> ResponseReturnValue:
                 "total_steps": payload.get("total_steps") or payload.get("supertonic_total_steps"),
                 "speed": payload.get("speed") or payload.get("supertonic_speed"),
             }
+        elif provider != "kokoro":
+            # Generic path for any other registered plugin (e.g. chatterbox_remote)
+            profile = {
+                "provider": provider,
+                "language": str(payload.get("language") or "a").strip().lower() or "a",
+                "voice": payload.get("voice"),
+            }
         else:
             profile = {
                 "provider": "kokoro",

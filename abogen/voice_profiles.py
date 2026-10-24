@@ -124,6 +124,19 @@ def normalize_profile_entry(entry: Any) -> Dict[str, Any]:
             ),
         }
 
+    if provider != "kokoro":
+        # Generic path for any other registered plugin (e.g. chatterbox_remote)
+        # -- no per-provider steps/speed knobs, just a voice id string.
+        voice = str(
+            entry.get("voice") or entry.get("voice_name") or entry.get("name") or ""
+        ).strip()
+        if voice:
+            return {
+                "provider": provider,
+                "language": language,
+                "voice": voice,
+            }
+
     voices = _normalize_voice_entries(entry.get("voices", []))
     if not voices:
         return {}

@@ -54,6 +54,7 @@
             <select id="profile-provider" name="provider" data-role="provider">
               <option value="kokoro">Kokoro</option>
               <option value="supertonic">Supertonic</option>
+              <option value="chatterbox_remote">Chatterbox (PT-BR, GPU remota)</option>
             </select>
           </div>
           <div class="field voice-editor__language">
@@ -83,6 +84,10 @@
               <input type="range" id="supertonic-speaker-speed" data-role="supertonic-speed" min="0.7" max="2.0" step="0.05" value="1.0">
             </div>
             <p class="hint">Supertonic voice mixing is not implemented yet. Stub target: <a href="https://github.com/Topping1/Supertonic-Voice-Mixer" target="_blank" rel="noreferrer">Supertonic-Voice-Mixer</a>.</p>
+          </div>
+          <div class="voice-editor__provider-panel" data-role="chatterbox_remote-panel" hidden>
+            <input type="hidden" data-role="chatterbox_remote-voice" value="chatterbox_ptbr_george">
+            <p class="hint">Voz fixa: Chatterbox Multilingual (finetune pt-BR, clone cross-lingual de bm_george), gerada sob demanda numa GPU separada do homelab. Sem configuração por speaker -- ver ADR do projeto epub-audiobook, addendum 6/7.</p>
           </div>
         </div>
         <div class="voice-editor__summary">
