@@ -47,8 +47,16 @@ _DEFAULT_TEMPERATURE = 0.8
 _DEFAULT_VOICE = "bm_george"  # reference_audio/<voice>.wav on chatterbox-gpu, not an abogen voice id
 
 _JOB_TYPE = "chatterbox-pt-br"
-_REQUEST_TIMEOUT_SECONDS = 120.0
-_HTTP_TIMEOUT_SECONDS = _REQUEST_TIMEOUT_SECONDS + 30.0  # headroom over the broker's own wake/queue wait
+# chatterbox-gpu splits any oversized chunk into <=400-char pieces and
+# synthesizes them sequentially within one /synthesize call (see its
+# server.py) - real chunks from this pipeline have been observed up to
+# ~4700 chars (abogen's own chunker not always honoring "Sentence"
+# granularity; out of scope to fix here), which can take 17+ sequential
+# generations, ~150s+ wall clock for ONE request. 120s was tuned for a
+# single normal-length chunk and isn't enough margin for that case -
+# confirmed in production: real job timed out mid-book on exactly this.
+_REQUEST_TIMEOUT_SECONDS = 300.0
+_HTTP_TIMEOUT_SECONDS = _REQUEST_TIMEOUT_SECONDS + 60.0  # headroom over the broker's own wake/queue wait
 
 
 def supported_languages() -> list[Language]:
