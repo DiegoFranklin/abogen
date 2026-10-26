@@ -129,64 +129,89 @@ class ExportService:
         cover_mime: Optional[str] = None,
         log_callback: Optional[callable] = None,
     ) -> None:
-        """Embed metadata and chapters into M4B file using FFmpeg + Mutagen."""
+        """Embed metadata and chapters into M4B file using FFmpeg + Mutagen.
+
+        Tags/chapters and the cover are embedded in two separate ffmpeg
+        passes rather than one ffmpeg invocation that maps both at once.
+        Verified directly (against the exact ffmpeg build this project
+        ships) that combining an ffmetadata input (needed for
+        -map_chapters) with an attached_pic cover stream in a single
+        invocation silently drops the cover stream - ffmpeg exits 0 and its
+        own stderr log claims to have written the video stream, but it is
+        absent from the resulting file. Running chapters/tags first (audio
+        only) and then stream-copying that result while adding the cover in
+        a second pass avoids the issue entirely: confirmed to preserve
+        tags, chapters, and a correctly attached_pic-flagged cover together.
+        """
         from abogen.domain.config_types import CoverConfig
         if isinstance(cover, CoverConfig):
             cover_path = cover.path
             cover_mime = cover.mime
+
         ffmetadata_path = self.write_ffmetadata_file(audio_path, metadata, chapters)
-        
         metadata_args = self._metadata_to_ffmpeg_args(metadata)
-        
-        cmd = ["ffmpeg", "-y", "-i", str(audio_path)]
-        
-        if ffmetadata_path:
-            cmd.extend(["-f", "ffmetadata", "-i", str(ffmetadata_path)])
-        
-        if cover_path and cover_path.exists():
-            cmd.extend(["-i", str(cover_path)])
-            cmd.extend(["-map", "0:a"])
-            cmd.extend(["-map", "1:v:0", "-c:v:0", "mjpeg", "-disposition:v:0", "attached_pic"])
-            if cover_mime:
-                cmd.extend(["-metadata:s:v:0", f"mimetype={cover_mime}"])
-            cmd.extend(["-metadata:s:v:0", "title=Cover Art"])
-        else:
-            cmd.extend(["-map", "0:a"])
-        
-        cmd.extend(["-c:a", "copy"])
-        
-        if ffmetadata_path:
-            cmd.extend(["-map_metadata", "1", "-map_chapters", "1"])
-        else:
-            cmd.extend(["-map_metadata", "0"])
-        
-        if metadata_args:
-            cmd.extend(metadata_args)
-        
-        cmd.extend(["-movflags", "+faststart+use_metadata_tags"])
-        
+        has_cover = bool(cover_path and cover_path.exists())
+        is_mp4_family = audio_path.suffix.lower() in {".m4b", ".mp4", ".m4a"}
+
         temp_output = audio_path.with_suffix(audio_path.suffix + ".tmp")
-        if audio_path.suffix.lower() in {".m4b", ".mp4", ".m4a"}:
-            cmd.extend(["-f", "mp4"])
-        cmd.append(str(temp_output))
-        
+        stage1_output = (
+            audio_path.with_suffix(audio_path.suffix + ".stage1.tmp") if has_cover else temp_output
+        )
+
         if log_callback:
             log_callback("Embedding metadata into M4B output")
-        
-        process = create_process(cmd, text=True)
-        return_code = process.wait()
-        
-        if ffmetadata_path and ffmetadata_path.exists():
-            try:
-                ffmetadata_path.unlink()
-            except OSError:
-                pass
-        
-        if return_code != 0:
-            if temp_output.exists():
-                temp_output.unlink(missing_ok=True)
-            raise RuntimeError(f"ffmpeg failed to embed metadata (exit code {return_code})")
-        
+
+        try:
+            # Pass 1: audio + metadata tags + chapters (no cover yet).
+            cmd = ["ffmpeg", "-y", "-i", str(audio_path)]
+            if ffmetadata_path:
+                cmd.extend(["-f", "ffmetadata", "-i", str(ffmetadata_path)])
+            cmd.extend(["-map", "0:a", "-c:a", "copy"])
+            if ffmetadata_path:
+                cmd.extend(["-map_metadata", "1", "-map_chapters", "1"])
+            else:
+                cmd.extend(["-map_metadata", "0"])
+            if metadata_args:
+                cmd.extend(metadata_args)
+            cmd.extend(["-movflags", "+faststart+use_metadata_tags"])
+            if is_mp4_family:
+                cmd.extend(["-f", "mp4"])
+            cmd.append(str(stage1_output))
+
+            self._run_ffmpeg(cmd, stage1_output)
+
+            # Pass 2: add the cover as an attached_pic on top of pass 1's
+            # output. Deliberately omits use_metadata_tags here - no new
+            # tags are set in this pass, that flag is what triggers the
+            # cover-dropping behaviour described above.
+            if has_cover:
+                cmd2 = [
+                    "ffmpeg", "-y",
+                    "-i", str(stage1_output),
+                    "-i", str(cover_path),
+                    "-map", "0", "-map", "1:v",
+                    "-c", "copy",
+                    "-c:v:0", "mjpeg",
+                    "-disposition:v:0", "attached_pic",
+                ]
+                if cover_mime:
+                    cmd2.extend(["-metadata:s:v:0", f"mimetype={cover_mime}"])
+                cmd2.extend(["-metadata:s:v:0", "title=Cover Art"])
+                cmd2.extend(["-movflags", "+faststart"])
+                if is_mp4_family:
+                    cmd2.extend(["-f", "mp4"])
+                cmd2.append(str(temp_output))
+
+                self._run_ffmpeg(cmd2, temp_output)
+        finally:
+            if has_cover:
+                stage1_output.unlink(missing_ok=True)
+            if ffmetadata_path and ffmetadata_path.exists():
+                try:
+                    ffmetadata_path.unlink()
+                except OSError:
+                    pass
+
         temp_output.replace(audio_path)
         
         if log_callback:
@@ -194,7 +219,17 @@ class ExportService:
         
         # Apply chapters via Mutagen for better compatibility
         self._apply_m4b_chapters_mutagen(audio_path, chapters, log_callback)
-    
+
+    @staticmethod
+    def _run_ffmpeg(cmd: List[str], output_path: Path) -> None:
+        """Run an ffmpeg command, raising if it fails and cleaning up its output."""
+        process = create_process(cmd, text=True)
+        return_code = process.wait()
+        if return_code != 0:
+            if output_path.exists():
+                output_path.unlink(missing_ok=True)
+            raise RuntimeError(f"ffmpeg failed to embed metadata (exit code {return_code})")
+
     @staticmethod
     def _metadata_to_ffmpeg_args(metadata: Dict[str, Any]) -> List[str]:
         args = []

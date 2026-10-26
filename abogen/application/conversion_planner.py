@@ -25,6 +25,7 @@ from abogen.domain.intro_outro import resolve_intro, resolve_outro
 from abogen.domain.metadata_extraction import extract_metadata_for_file
 from abogen.domain.metadata_merge import merge_metadata
 from abogen.domain.voice_markers import split_text_by_voice_markers
+from abogen.domain.voice_utils import coerce_truthy
 
 
 def build_conversion_plan(request: ConversionRequest) -> ConversionPlan:
@@ -176,7 +177,27 @@ def _apply_selection(
     # If user specified chapters, apply overrides
     chapter_chunk = request.chapter_chunk
     if chapter_chunk and chapter_chunk.chapter_overrides:
-        selected, _, diagnostics = apply_chapter_overrides(extracted, chapter_chunk.chapter_overrides)
+        overrides = chapter_chunk.chapter_overrides
+        if not any(
+            coerce_truthy(o.get("enabled", True)) for o in overrides if isinstance(o, dict)
+        ):
+            # Every stored override is disabled. These overrides already carry
+            # each chapter's real title/text (extracted once from the source
+            # at upload time) - this is "no manual selection was made", not
+            # "convert nothing". Treat it as select-all instead of falling
+            # through to the raw-text re-parse below: that re-parse has no
+            # EPUB-aware chapter boundaries and silently narrates whatever it
+            # finds (e.g. just the front matter) instead of the book.
+            logging.warning(
+                "[planner] All %d chapter overrides were disabled; "
+                "treating as no selection and converting every chapter.",
+                len(overrides),
+            )
+            for o in overrides:
+                if isinstance(o, dict):
+                    o["enabled"] = True
+
+        selected, _, diagnostics = apply_chapter_overrides(extracted, overrides)
         if selected:
             # Map back to (title, text, voice) tuples
             result = []
